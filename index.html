@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Video Vision Simulator — IVAD Lab</title>
+<style>
+  :root {
+    --bg: #0b0e17;
+    --panel: rgba(14, 17, 28, 0.94);
+    --border: rgba(255,255,255,0.07);
+    --accent: #5b9cf5;
+    --text: #e2e6ef;
+    --muted: #7c8498;
+    --radius: 10px;
+    --sab: env(safe-area-inset-bottom, 0px);
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, sans-serif; color: var(--text); }
+  #srcVideo { display: none; }
+  #glCanvas { display: block; width: 100%; height: 100%; background: #000; }
+
+  /* ── Drop zone ── */
+  #dropZone {
+    position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; background: var(--bg); gap: 18px;
+    padding: 28px; text-align: center;
+  }
+  #dropZone.hidden { display: none; }
+  #dropZone h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; }
+  #dropZone p  { color: var(--muted); max-width: 420px; font-size: 0.92rem; line-height: 1.5; }
+  .upload-box {
+    border: 2px dashed rgba(255,255,255,0.15); border-radius: var(--radius); padding: 40px 30px;
+    background: rgba(255,255,255,0.02); max-width: 480px; width: 100%; cursor: pointer; transition: 0.2s;
+  }
+  .upload-box:hover, .upload-box.dragover { border-color: var(--accent); background: rgba(91,156,245,0.05); }
+  .upload-icon  { font-size: 2.5rem; margin-bottom: 12px; opacity: 0.5; }
+  .upload-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 6px; }
+  .upload-sub   { font-size: 0.82rem; color: var(--muted); line-height: 1.5; }
+  #fileInput { display: none; }
+
+  /* ── Top bar ── */
+  #topBar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+    display: none; align-items: center; justify-content: space-between;
+    padding: 10px 16px; background: linear-gradient(to bottom, rgba(0,0,0,0.6), transparent);
+  }
+  #topBar.show { display: flex; }
+  #topBar .title { font-size: 0.82rem; font-weight: 600; opacity: 0.9; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 16px; border-radius: 8px; border: none; font-size: 0.82rem; font-weight: 600; cursor: pointer; }
+  .btn-accent { background: var(--accent); color: #fff; }
+  .btn-ghost  { background: rgba(255,255,255,0.08); color: var(--text); }
+  .btn-ghost:hover { background: rgba(255,255,255,0.14); }
+
+  /* ── Controls panel — bottom on mobile, side on desktop ── */
+  #controls {
+    position: fixed; z-index: 50; display: none;
+    background: var(--panel); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--border); overflow-y: auto;
+    /* Mobile: bottom sheet */
+    bottom: 0; left: 0; right: 0; max-height: 55vh;
+    border-radius: var(--radius) var(--radius) 0 0;
+    padding: 14px 16px calc(14px + var(--sab)) 16px;
+    flex-direction: column; gap: 10px;
+  }
+  #controls.show { display: flex; }
+
+  @media (min-width: 800px) {
+    /* Desktop: side panel */
+    #controls {
+      top: 16px; right: 16px; bottom: auto; left: auto;
+      width: 320px; max-height: calc(100vh - 100px);
+      border-radius: var(--radius);
+      padding: 18px;
+    }
+  }
+
+  .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .panel-title  { font-size: 0.95rem; font-weight: 600; }
+  .close-btn    { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1.3rem; line-height: 1; }
+  .close-btn:hover { color: var(--text); }
+
+  /* Toggle grid */
+  .toggle-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-bottom: 10px; }
+  .toggle-btn {
+    background: rgba(255,255,255,0.04); border: 1px solid var(--border); color: var(--muted);
+    border-radius: 6px; padding: 8px 6px; font-size: 0.76rem; text-align: center; cursor: pointer; transition: 0.15s;
+  }
+  .toggle-btn.active { background: rgba(91,156,245,0.18); border-color: var(--accent); color: #fff; }
+
+  @media (min-width: 800px) {
+    .toggle-grid { grid-template-columns: 1fr; }
+    .toggle-btn  { text-align: left; padding: 9px 12px; }
+  }
+
+  /* Sliders */
+  .ctrl-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .ctrl-row label { font-size: 0.72rem; color: var(--muted); min-width: 58px; text-align: right; }
+  .ctrl-row input[type=range] { flex: 1; accent-color: var(--accent); height: 5px; }
+  .ctrl-row .val { font-size: 0.72rem; color: var(--text); min-width: 34px; font-variant-numeric: tabular-nums; }
+  .snellen-badge { font-size: 0.70rem; color: #fff; background: rgba(255,255,255,0.1); padding: 2px 8px; border-radius: 4px; display: none; white-space: nowrap; min-width: 50px; text-align: center; }
+
+  /* Conditional sub-panels (AMD, DR) */
+  .sub-panel {
+    display: none; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.04);
+    border-radius: 8px; padding: 10px 12px; margin-bottom: 8px;
+  }
+  .sub-panel.show { display: block; }
+  .sub-title { font-size: 0.72rem; color: var(--accent); font-weight: 600; margin-bottom: 8px; }
+  .rand-btn {
+    width: 100%; background: rgba(255,255,255,0.06); border: 1px solid var(--border);
+    color: var(--text); padding: 7px; border-radius: 6px; font-size: 0.78rem; cursor: pointer;
+  }
+  .rand-btn:hover { background: rgba(255,255,255,0.12); }
+
+  /* Playback bar — always bottom, always horizontal */
+  #playbackBar {
+    position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+    width: 92%; max-width: 700px; z-index: 55; display: none;
+    background: var(--panel); backdrop-filter: blur(16px); border: 1px solid var(--border);
+    border-radius: 50px; padding: 8px 18px; align-items: center; gap: 10px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.5);
+  }
+  #playbackBar.show { display: flex; }
+  .pb-btn {
+    background: none; border: none; color: var(--text); font-size: 1.1rem; cursor: pointer;
+    width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  }
+  .pb-btn:hover { background: rgba(255,255,255,0.1); }
+  #seekBar { flex: 1; accent-color: var(--accent); }
+  #timeDisp { font-size: 0.72rem; font-variant-numeric: tabular-nums; color: var(--muted); min-width: 85px; text-align: center; }
+
+  /* Settings toggle button (visible when panel closed) */
+  #settingsBtn {
+    position: fixed; top: 12px; right: 12px; z-index: 45; display: none;
+    background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: 0.82rem; font-weight: 500;
+    backdrop-filter: blur(10px);
+  }
+
+  #statusMsg { position: fixed; bottom: 56px; left: 12px; z-index: 60; font-size: 0.70rem; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<video id="srcVideo" playsinline loop crossorigin="anonymous"></video>
+<canvas id="glCanvas"></canvas>
+
+<!-- Drop zone -->
+<div id="dropZone">
+  <div class="upload-box" id="uploadBox">
+    <div class="upload-icon">🎬</div>
+    <div class="upload-title">Video Vision Simulator</div>
+    <div class="upload-sub">Load a video walkthrough, then apply scientifically grounded vision simulations in real time.<br>MP4, WebM, MOV &bull; Drag &amp; drop or click.</div>
+  </div>
+  <input type="file" id="fileInput" accept="video/*">
+</div>
+
+<!-- Top bar -->
+<div id="topBar">
+  <span class="title">IVAD Lab — Video Simulator</span>
+  <button class="btn btn-ghost" onclick="resetToStart()">Change Video</button>
+</div>
+
+<!-- Settings toggle (when panel is closed) -->
+<button id="settingsBtn">⚙ Settings</button>
+
+<!-- Controls panel -->
+<div id="controls">
+  <div class="panel-header">
+    <span class="panel-title">Vision Settings</span>
+    <button class="close-btn" id="closePanel">&times;</button>
+  </div>
+
+  <!-- Severity -->
+  <div class="ctrl-row">
+    <label>Severity</label>
+    <input type="range" id="severitySlider" min="0" max="100" value="50">
+    <span class="val" id="severityVal">50%</span>
+    <span class="snellen-badge" id="snellenBadge">20/90</span>
+  </div>
+
+  <!-- Condition toggles -->
+  <div class="toggle-grid" id="toggleGrid">
+    <button class="toggle-btn" data-flag="1">Acuity (CSF)</button>
+    <button class="toggle-btn" data-flag="2">Low Contrast</button>
+    <button class="toggle-btn" data-flag="4">Cataract</button>
+    <button class="toggle-btn" data-flag="8">Glaucoma</button>
+    <button class="toggle-btn" data-flag="16">AMD</button>
+    <button class="toggle-btn" data-flag="32">Diabetic Ret.</button>
+    <button class="toggle-btn" data-flag="64" data-cvd="1">Deuteranopia</button>
+    <button class="toggle-btn" data-flag="128" data-cvd="1">Protanopia</button>
+    <button class="toggle-btn" data-flag="256" data-cvd="1">Tritanopia</button>
+  </div>
+
+  <!-- AMD sub-panel (appears when AMD active) -->
+  <div class="sub-panel" id="amdPanel">
+    <div class="sub-title">AMD Scotoma Position</div>
+    <div class="ctrl-row">
+      <label>Eccentricity</label>
+      <input type="range" id="amdEcc" min="0" max="20" step="0.5" value="3">
+      <span class="val" id="amdEccVal">3°</span>
+    </div>
+    <div class="ctrl-row">
+      <label>Angle</label>
+      <input type="range" id="amdAngle" min="0" max="360" step="5" value="0">
+      <span class="val" id="amdAngleVal">0°</span>
+    </div>
+  </div>
+
+  <!-- DR sub-panel (appears when DR active) -->
+  <div class="sub-panel" id="drPanel">
+    <div class="sub-title">Diabetic Retinopathy</div>
+    <button class="rand-btn" id="drRandomize">🔀 Randomize Pattern</button>
+  </div>
+</div>
+
+<!-- Playback bar (separate from controls, always at bottom) -->
+<div id="playbackBar">
+  <button class="pb-btn" id="playPauseBtn">▶</button>
+  <input type="range" id="seekBar" min="0" max="1000" value="0">
+  <span id="timeDisp">0:00 / 0:00</span>
+  <button class="pb-btn" id="muteBtn">🔇</button>
+</div>
+
+<span id="statusMsg"></span>
+
+<script>
+/* =======================================================================
+   Thompson / Chung-Legge CSF MODEL — matches index.html exactly
+   ======================================================================= */
+const SPN = 199, SPN_l = Math.log10(SPN);
+const FPN = 0.915, FPN_l = Math.log10(FPN);
+const wL = 0.68, wH = 1.28;
+
+function cFromPR(PR) { const t = Math.pow(10, -PR); return (2 - t) / (199 * t); }
+function aFromLogMARandC(logMAR, c) {
+  const S = Math.pow(10, -logMAR), FCN = 14.0;
+  const FCl = Math.log10(Math.max(1e-6, S * FCN));
+  const term = Math.max(0, SPN_l + Math.log10(Math.max(1e-9, c)));
+  const delta = Math.sqrt(term) / wH;
+  return Math.pow(10, FCl - delta) / FPN;
+}
+function Sl_log(f, a, c) {
+  const fl = Math.log10(Math.max(1e-6, f));
+  const FPl = FPN_l + Math.log10(Math.max(1e-9, a));
+  const w = (f < Math.pow(10, FPl)) ? wL : wH;
+  return SPN_l + Math.log10(Math.max(1e-9, c)) - Math.pow(fl - FPl, 2) * (w * w);
+}
+function bandGainCSF(f, a, c) {
+  return Math.max(0, Math.pow(10, Sl_log(f, a, c) - Sl_log(f, 1, 1)));
+}
+function bandCenterCPD(i, ppd) { return 0.5 / Math.pow(2, i + 0.5) * ppd; }
+
+function computeCSFBandGains(severity, ch, vFovDeg) {
+  const ppd = ch / vFovDeg;
+  const logMAR = severity * 1.3, PR = 2.0;
+  const c = cFromPR(PR), a = aFromLogMARandC(logMAR, c);
+  const g = new Float32Array(4);
+  for (let i = 0; i < 4; i++) g[i] = bandGainCSF(bandCenterCPD(i, ppd), a, c);
+  return g;
+}
+function getSnellenString(sev) {
+  return '20/' + Math.round(20 * Math.pow(10, sev * 1.3));
+}
+
+/* =======================================================================
+   GLSL SHADERS
+   ======================================================================= */
+const VERT = `#version 300 es
+precision highp float;
+in vec2 aPos; in vec2 aUV; out vec2 vUV;
+void main(){ vUV = aUV; gl_Position = vec4(aPos, 0.0, 1.0); }`;
+
+const FRAG = `#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform int   uActiveMask;  // bitmask
+uniform float uSeverity;    // 0–1
+uniform float uTime;        // videoEl.currentTime (freezes on pause)
+uniform vec2  uResolution;
+uniform vec4  uBandGains;   // CSF band gains from JS
+uniform float uVFOV;        // vertical FOV in degrees
+
+// AMD user controls
+uniform float uEccentricity; // degrees offset from center
+uniform float uAngle;        // direction of offset in degrees
+
+// DR seed for randomization
+uniform float uSeed;
+
+in  vec2 vUV;
+out vec4 fragColor;
+
+// ── sRGB ↔ linear ──
+vec3 srgbToLinear(vec3 c){
+  return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
+}
+vec3 linearToSrgb(vec3 c){
+  return mix(c * 12.92, 1.055 * pow(c, vec3(1.0/2.4)) - 0.055, step(0.0031308, c));
+}
+
+// ── Hash ──
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+
+// ── Spiral blur (golden angle, correct radius) ──
+// radiusPx is in actual pixel units at current resolution
+vec3 spiralBlur(vec2 uv, float radiusPx) {
+  if (radiusPx <= 0.5) return texture(uTex, uv).rgb;
+  vec3 acc = vec3(0.0);
+  const float GA = 2.39996323;
+  const float N = 64.0;
+  vec2 inv = 1.0 / uResolution;
+  for (float i = 0.0; i < N; i++) {
+    float r = radiusPx * sqrt(i / N);
+    float th = i * GA;
+    vec2 s = clamp(uv + vec2(cos(th), sin(th)) * r * inv, 0.0, 1.0);
+    acc += texture(uTex, s).rgb;
+  }
+  return acc / N;
+}
+
+// ── CVD — Machado 2009, severity = 1.0 (GLSL column-major) ──
+vec3 deuteranopia(vec3 rgb){
+  mat3 m = mat3(0.29275, 0.29275,-0.02234,
+                0.70725, 0.70725, 0.02234,
+                0.00000, 0.00000, 1.00000);
+  return clamp(m * rgb, 0.0, 1.0);
+}
+vec3 protanopia(vec3 rgb){
+  mat3 m = mat3(0.10889, 0.10889, 0.00447,
+                0.89111, 0.89111,-0.00447,
+                0.00000, 0.00000, 1.00000);
+  return clamp(m * rgb, 0.0, 1.0);
+}
+vec3 tritanopia(vec3 rgb){
+  mat3 m = mat3(1.00000, 0.15236, 0.00000,
+                0.00000, 0.86717, 0.00000,
+                0.00000,-0.01953, 1.00000);
+  return clamp(m * rgb, 0.0, 1.0);
+}
+
+void main(){
+  vec2 uv = vUV;
+  float sev = uSeverity;
+  float resScale = uResolution.y / 1080.0;
+  float aspect = uResolution.x / uResolution.y;
+
+  vec3 col = texture(uTex, uv).rgb;
+
+  /* ════════════════════════════════════════════════════════════
+     1. ACUITY — 4-band CSF Laplacian decomposition (bit 0)
+     Band radii 2/4/8/16 px (resolution-scaled).
+     Gains computed in JS via Thompson/Chung-Legge model.
+     All processing in linear light.
+     ════════════════════════════════════════════════════════════ */
+  if ((uActiveMask & 1) != 0) {
+    vec3 m0 = srgbToLinear(col);
+    vec3 m1 = srgbToLinear(spiralBlur(uv, 2.0 * resScale));
+    vec3 m2 = srgbToLinear(spiralBlur(uv, 4.0 * resScale));
+    vec3 m3 = srgbToLinear(spiralBlur(uv, 8.0 * resScale));
+    vec3 m4 = srgbToLinear(spiralBlur(uv, 16.0 * resScale));
+    vec3 result = m4
+      + (m0 - m1) * uBandGains.x
+      + (m1 - m2) * uBandGains.y
+      + (m2 - m3) * uBandGains.z
+      + (m3 - m4) * uBandGains.w;
+    col = linearToSrgb(clamp(result, 0.0, 1.0));
+  }
+
+  /* ════════════════════════════════════════════════════════════
+     2. REDUCED CONTRAST — Pelli-Robson model (bit 1)
+     k = 10^(PR - 2.0), PR = 2*(1-severity)
+     ════════════════════════════════════════════════════════════ */
+  if ((uActiveMask & 2) != 0) {
+    float PR = 2.0 - sev * 2.0;
+    float k = min(1.0, pow(10.0, PR - 2.0));
+    vec3 lin = srgbToLinear(col);
+    float Y = dot(lin, vec3(0.2126, 0.7152, 0.0722));
+    col = linearToSrgb(clamp(vec3(Y) + k * (lin - vec3(Y)), 0.0, 1.0));
+  }
+
+  /* ════════════════════════════════════════════════════════════
+     3. CATARACT — blur + yellowing + haze veil (bit 2)
+     ════════════════════════════════════════════════════════════ */
+  if ((uActiveMask & 4) != 0) {
+    vec3 blurred = spiralBlur(uv, sev * uResolution.y * 0.025);
+    float yf = sev * 0.7;
+    blurred.b *= (1.0 - 0.8 * yf);
+    blurred.r = min(1.0, blurred.r * (1.0 + 0.10 * yf));
+    blurred.g = min(1.0, blurred.g * (1.0 + 0.05 * yf));
+    vec3 lin = mix(srgbToLinear(blurred), vec3(0.43, 0.39, 0.35), sev * 0.25);
+    col = mix(col, linearToSrgb(clamp(lin, 0.0, 1.0)), sev);
+  }
+
+  // Shared: eccentricity in visual degrees from gaze center
+  vec2 diff = (uv - vec2(0.5)) * vec2(aspect, 1.0);
+  float distDeg = length(diff) * uVFOV;
+
+  /* ════════════════════════════════════════════════════════════
+     4. GLAUCOMA — peripheral field loss (bit 3)
+     ════════════════════════════════════════════════════════════ */
+  if ((uActiveMask & 8) != 0) {
+    float clearR = mix(45.0, 5.0, sev);
+    float edge = mix(15.0, 2.0, sev);
+    float mask = 1.0 - smoothstep(clearR, clearR + edge, distDeg);
+    col *= mask;
+  }
+
+  /* ════════════════════════════════════════════════════════════
+     5. AMD — eccentric irregular scotoma (bit 4)
+     User controls eccentricity (degrees) and angle (direction).
+     Scotoma boundary has angular irregularity (non-circular).
+     Interior is heavily blurred + darkened (not pure black).
+     Mild contrast reduction in remaining vision.
+     ════════════════════════════════════════════════════════════ */
+  if ((uActiveMask & 16) != 0) {
+    // Convert user eccentricity/angle to UV offset
+    float rad = radians(uAngle);
+    vec2 offsetDeg = vec2(cos(rad), sin(rad)) * uEccentricity;
+    vec2 offsetUV = offsetDeg / vec2(uVFOV * aspect, uVFOV);
+    vec2 scotCenter = vec2(0.5) + offsetUV;
+
+    vec2 d = (uv - scotCenter) * vec2(aspect, 1.0);
+    float dist = length(d);
+
+    // Scotoma radius in UV-aspect-corrected space
+    float scotR = sev * 0.18;
+
+    // Angular irregularity — non-circular boundary
+    float angle = atan(d.y, d.x);
+    float irreg = 0.15 * sin(angle * 3.0 + 1.7)
+                + 0.10 * sin(angle * 5.0 - 0.9)
+                + 0.08 * sin(angle * 7.0 + 3.1);
+    float modR = scotR * (1.0 + irreg * sev);
+
+    float feather = mix(0.02, 0.06, sev);
+    float scotMask = smoothstep(modR - feather, modR + feather, dist);
+
+    // Inside: heavily blurred + darkened (patients retain coarse awareness)
+    vec3 blurC = spiralBlur(uv, 12.0 * resScale);
+    col = mix(blurC * 0.12, col, scotMask);
+
+    // Mild contrast reduction in remaining vision
+    float PR = 2.0 - sev * 0.5;
+    float k = min(1.0, pow(10.0, PR - 2.0));
+    vec3 lin = srgbToLinear(col);
+    float Y = dot(lin, vec3(0.2126, 0.7152, 0.0722));
+    col = linearToSrgb(clamp(vec3(Y) + k * (lin - vec3(Y)), 0.0, 1.0));
+  }
+
+  /* ════════════════════════════════════════════════════════════
+     6. DIABETIC RETINOPATHY — randomized scotoma field (bit 5)
+     Features: vitreous haze, Pelli-Robson contrast reduction,
+     eccentricity-biased circular hemorrhage spots (matching website),
+     yellowish hard exudate deposits at severity > 40%.
+     Seed uniform enables user-triggered randomization.
+     ════════════════════════════════════════════════════════════ */
+  if ((uActiveMask & 32) != 0) {
+    // Vitreous haze
+    float hazeR = sev * 2.0 * resScale;
+    if (hazeR > 0.5) col = spiralBlur(uv, hazeR);
+
+    // Contrast reduction (Pelli-Robson)
+    float PR = 2.0 - sev * 0.8;
+    float k = min(1.0, pow(10.0, PR - 2.0));
+    vec3 lin = srgbToLinear(col);
+    float Y = dot(lin, vec3(0.2126, 0.7152, 0.0722));
+    col = linearToSrgb(clamp(vec3(Y) + k * (lin - vec3(Y)), 0.0, 1.0));
+
+    // Dark hemorrhage spots — seed-randomized, eccentricity-biased
+    float numSpots = 4.0 + sev * 14.0;
+    for (float i = 0.0; i < 18.0; i++) {
+      if (i >= numSpots) break;
+
+      // Position with seed for randomization
+      vec2 bp = vec2(hash(vec2(i * 7.13 + uSeed, 3.71)),
+                     hash(vec2(i * 11.97 + uSeed, 5.23)));
+      // Eccentricity bias: some cluster centrally, others at periphery
+      float eccBias = hash(vec2(i * 2.31 + uSeed, 17.43));
+      bp = mix(vec2(0.5), bp, 0.3 + 0.7 * eccBias);
+
+      // Vitreous drift (each spot independently)
+      float dSpd = 0.08 + 0.12 * hash(vec2(i * 5.5, 8.3));
+      bp += dSpd * vec2(
+        sin(uTime * (0.1 + 0.05 * hash(vec2(i, 1.0))) + i * 2.1),
+        cos(uTime * (0.08 + 0.04 * hash(vec2(i, 2.0))) + i * 1.7)
+      );
+      bp = fract(bp);
+
+      // Variable size, circular spots (matches website)
+      float sz = (0.02 + 0.04 * hash(vec2(i * 3.3 + uSeed, 9.1))) * sev;
+      vec2 dd = (uv - bp) * vec2(aspect, 1.0);
+      float sDist = length(dd);
+      float sMask = 1.0 - smoothstep(sz * 0.5, sz, sDist);
+      col = mix(col, col * 0.08, sMask * 0.85);
+    }
+
+    // Hard exudates at higher severity (yellowish deposits)
+    if (sev > 0.4) {
+      float nEx = (sev - 0.4) * 15.0;
+      for (float i = 0.0; i < 10.0; i++) {
+        if (i >= nEx) break;
+        vec2 ep = vec2(hash(vec2(i * 13.7 + uSeed, 21.3)),
+                       hash(vec2(i * 19.1 + uSeed, 7.9)));
+        ep = mix(vec2(0.5), ep, 0.5);
+        float eSz = (0.008 + 0.015 * hash(vec2(i * 4.7, 12.1))) * sev;
+        vec2 dd = (uv - ep) * vec2(aspect, 1.0);
+        float eDist = length(dd);
+        float eMask = 1.0 - smoothstep(eSz * 0.3, eSz, eDist);
+        col = mix(col, vec3(0.85, 0.78, 0.45), eMask * 0.6 * sev);
+      }
+    }
+  }
+
+  /* ════════════════════════════════════════════════════════════
+     7–9. CVD — Machado 2009 with severity interpolation
+     ════════════════════════════════════════════════════════════ */
+  if ((uActiveMask & 64) != 0) {
+    vec3 lin = srgbToLinear(col);
+    col = linearToSrgb(mix(lin, deuteranopia(lin), sev));
+  }
+  if ((uActiveMask & 128) != 0) {
+    vec3 lin = srgbToLinear(col);
+    col = linearToSrgb(mix(lin, protanopia(lin), sev));
+  }
+  if ((uActiveMask & 256) != 0) {
+    vec3 lin = srgbToLinear(col);
+    col = linearToSrgb(mix(lin, tritanopia(lin), sev));
+  }
+
+  fragColor = vec4(col, 1.0);
+}`;
+
+/* =======================================================================
+   STATE
+   ======================================================================= */
+let gl, program, loc = {}, videoEl, glCanvas, videoTexture;
+let activeBitmask = 0, currentSeverity = 0.5, startTime = 0;
+let currentEccentricity = 3.0, currentAngle = 0.0, currentSeed = 0.0;
+let videoReady = false, animFrameId = null, seekDragging = false;
+let panelOpen = true;
+
+/* =======================================================================
+   WEBGL INIT
+   ======================================================================= */
+function initGL() {
+  glCanvas = document.getElementById('glCanvas');
+  gl = glCanvas.getContext('webgl2', { antialias: false, alpha: false });
+  if (!gl) { alert('WebGL 2 not available'); return false; }
+
+  function compile(t, s) {
+    const sh = gl.createShader(t); gl.shaderSource(sh, s); gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) { console.error(gl.getShaderInfoLog(sh)); return null; }
+    return sh;
+  }
+  const vs = compile(gl.VERTEX_SHADER, VERT), fs = compile(gl.FRAGMENT_SHADER, FRAG);
+  if (!vs || !fs) return false;
+
+  program = gl.createProgram();
+  gl.attachShader(program, vs); gl.attachShader(program, fs); gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) { console.error(gl.getProgramInfoLog(program)); return false; }
+  gl.useProgram(program);
+
+  // Fullscreen quad — UV (0,0) at top-left so video is right-side up
+  const q = new Float32Array([-1,-1, 0,1,  1,-1, 1,1,  -1,1, 0,0,  1,1, 1,0]);
+  const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
+  gl.bufferData(gl.ARRAY_BUFFER, q, gl.STATIC_DRAW);
+  const aP = gl.getAttribLocation(program, 'aPos'), aU = gl.getAttribLocation(program, 'aUV');
+  gl.enableVertexAttribArray(aP); gl.vertexAttribPointer(aP, 2, gl.FLOAT, false, 16, 0);
+  gl.enableVertexAttribArray(aU); gl.vertexAttribPointer(aU, 2, gl.FLOAT, false, 16, 8);
+
+  // Uniform locations
+  ['uTex','uActiveMask','uSeverity','uTime','uResolution','uBandGains','uVFOV',
+   'uEccentricity','uAngle','uSeed'].forEach(n => {
+    loc[n] = gl.getUniformLocation(program, n);
+  });
+
+  // Video texture
+  videoTexture = gl.createTexture();
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, videoTexture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0,0,0,255]));
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.uniform1i(loc.uTex, 0);
+  return true;
+}
+
+/* =======================================================================
+   RENDER LOOP
+   ======================================================================= */
+function renderFrame() {
+  animFrameId = requestAnimationFrame(renderFrame);
+  if (!videoReady || videoEl.readyState < 2) return;
+
+  const vw = videoEl.videoWidth, vh = videoEl.videoHeight;
+  const cw = window.innerWidth, ch = window.innerHeight;
+  const scale = Math.min(cw / vw, ch / vh);
+  const dpr = window.devicePixelRatio || 1;
+  const drawW = Math.round(vw * scale), drawH = Math.round(vh * scale);
+  glCanvas.style.width = drawW + 'px';
+  glCanvas.style.height = drawH + 'px';
+  glCanvas.style.marginLeft = ((cw - drawW) / 2) + 'px';
+  glCanvas.style.marginTop = ((ch - drawH) / 2) + 'px';
+  const bufW = Math.round(drawW * dpr), bufH = Math.round(drawH * dpr);
+  if (glCanvas.width !== bufW || glCanvas.height !== bufH) {
+    glCanvas.width = bufW; glCanvas.height = bufH;
+  }
+  gl.viewport(0, 0, bufW, bufH);
+
+  // Upload video frame
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, videoTexture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, videoEl);
+
+  // Uniforms
+  gl.uniform1i(loc.uActiveMask, activeBitmask);
+  gl.uniform1f(loc.uSeverity, currentSeverity);
+  gl.uniform1f(loc.uTime, videoEl.currentTime); // syncs with video (freezes on pause)
+  gl.uniform2f(loc.uResolution, bufW, bufH);
+  gl.uniform1f(loc.uVFOV, 52.0);
+  gl.uniform1f(loc.uEccentricity, currentEccentricity);
+  gl.uniform1f(loc.uAngle, currentAngle);
+  gl.uniform1f(loc.uSeed, currentSeed);
+
+  const gains = computeCSFBandGains(currentSeverity, bufH, 52.0);
+  gl.uniform4f(loc.uBandGains, gains[0], gains[1], gains[2], gains[3]);
+
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+
+/* =======================================================================
+   VIDEO LOADING
+   ======================================================================= */
+function loadVideo(file) {
+  if (!file) return;
+  videoEl = document.getElementById('srcVideo');
+  videoEl.src = URL.createObjectURL(file);
+  videoEl.muted = true;
+
+  videoEl.onloadeddata = () => {
+    videoReady = true;
+    document.getElementById('dropZone').classList.add('hidden');
+    document.getElementById('controls').classList.add('show');
+    document.getElementById('playbackBar').classList.add('show');
+    document.getElementById('topBar').classList.add('show');
+    videoEl.play();
+    document.getElementById('playPauseBtn').textContent = '⏸';
+    setStatus(file.name + ' — ' + videoEl.videoWidth + '×' + videoEl.videoHeight);
+    renderFrame();
+  };
+
+  // Seek bar via ontimeupdate (more efficient than per-frame polling)
+  videoEl.ontimeupdate = () => {
+    if (!seekDragging && videoEl.duration) {
+      document.getElementById('seekBar').value = (videoEl.currentTime / videoEl.duration) * 1000;
+      document.getElementById('timeDisp').textContent =
+        fmt(videoEl.currentTime) + ' / ' + fmt(videoEl.duration);
+    }
+  };
+
+  videoEl.onerror = () => setStatus('Error loading video');
+}
+
+function resetToStart() {
+  if (animFrameId) cancelAnimationFrame(animFrameId);
+  videoReady = false;
+  if (videoEl) { videoEl.pause(); videoEl.src = ''; }
+  document.getElementById('dropZone').classList.remove('hidden');
+  document.getElementById('controls').classList.remove('show');
+  document.getElementById('playbackBar').classList.remove('show');
+  document.getElementById('topBar').classList.remove('show');
+  document.getElementById('settingsBtn').style.display = 'none';
+}
+
+/* =======================================================================
+   HELPERS
+   ======================================================================= */
+function fmt(s) {
+  const m = Math.floor(s / 60), sc = Math.floor(s % 60);
+  return m + ':' + (sc < 10 ? '0' : '') + sc;
+}
+function setStatus(msg) { document.getElementById('statusMsg').textContent = msg; }
+
+/* =======================================================================
+   UI INIT
+   ======================================================================= */
+document.addEventListener('DOMContentLoaded', () => {
+  if (!initGL()) return;
+
+  // ── File input ──
+  document.getElementById('uploadBox').addEventListener('click', () =>
+    document.getElementById('fileInput').click());
+  document.getElementById('fileInput').addEventListener('change', e => {
+    if (e.target.files[0]) loadVideo(e.target.files[0]);
+  });
+
+  // ── Drag & drop ──
+  const dz = document.getElementById('dropZone');
+  const ub = document.getElementById('uploadBox');
+  dz.addEventListener('dragover', e => { e.preventDefault(); ub.classList.add('dragover'); });
+  dz.addEventListener('dragleave', () => ub.classList.remove('dragover'));
+  dz.addEventListener('drop', e => {
+    e.preventDefault(); ub.classList.remove('dragover');
+    if (e.dataTransfer.files[0]) loadVideo(e.dataTransfer.files[0]);
+  });
+
+  // ── Condition toggles (bitmask) ──
+  const snB = document.getElementById('snellenBadge');
+  const amdPanel = document.getElementById('amdPanel');
+  const drPanel = document.getElementById('drPanel');
+
+  document.querySelectorAll('.toggle-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+      const f = parseInt(this.dataset.flag);
+      const isCVD = this.hasAttribute('data-cvd');
+
+      // CVD: mutually exclusive — deactivate siblings before toggling
+      if (isCVD && !this.classList.contains('active')) {
+        document.querySelectorAll('.toggle-btn[data-cvd]').forEach(other => {
+          if (other !== this && other.classList.contains('active')) {
+            other.classList.remove('active');
+            activeBitmask &= ~parseInt(other.dataset.flag);
+          }
+        });
+      }
+
+      this.classList.toggle('active');
+      if (this.classList.contains('active')) activeBitmask |= f;
+      else activeBitmask &= ~f;
+
+      // Conditional UI
+      snB.style.display = (activeBitmask & 1) ? 'inline-block' : 'none';
+      amdPanel.classList.toggle('show', !!(activeBitmask & 16));
+      drPanel.classList.toggle('show', !!(activeBitmask & 32));
+    });
+  });
+
+  // ── Severity slider ──
+  const sevS = document.getElementById('severitySlider');
+  const sevV = document.getElementById('severityVal');
+  snB.textContent = getSnellenString(currentSeverity);
+  sevS.addEventListener('input', () => {
+    currentSeverity = sevS.value / 100;
+    sevV.textContent = sevS.value + '%';
+    snB.textContent = getSnellenString(currentSeverity);
+  });
+
+  // ── AMD controls ──
+  document.getElementById('amdEcc').addEventListener('input', e => {
+    currentEccentricity = parseFloat(e.target.value);
+    document.getElementById('amdEccVal').textContent = currentEccentricity + '°';
+  });
+  document.getElementById('amdAngle').addEventListener('input', e => {
+    currentAngle = parseFloat(e.target.value);
+    document.getElementById('amdAngleVal').textContent = currentAngle + '°';
+  });
+
+  // ── DR randomize ──
+  document.getElementById('drRandomize').addEventListener('click', () => {
+    currentSeed = Math.random() * 100.0;
+  });
+
+  // ── Panel open/close ──
+  document.getElementById('closePanel').addEventListener('click', () => {
+    document.getElementById('controls').classList.remove('show');
+    document.getElementById('settingsBtn').style.display = 'block';
+  });
+  document.getElementById('settingsBtn').addEventListener('click', () => {
+    document.getElementById('controls').classList.add('show');
+    document.getElementById('settingsBtn').style.display = 'none';
+  });
+
+  // ── Playback ──
+  document.getElementById('playPauseBtn').addEventListener('click', () => {
+    if (!videoEl) return;
+    if (videoEl.paused) { videoEl.play(); document.getElementById('playPauseBtn').textContent = '⏸'; }
+    else { videoEl.pause(); document.getElementById('playPauseBtn').textContent = '▶'; }
+  });
+
+  const sk = document.getElementById('seekBar');
+  sk.addEventListener('mousedown', () => seekDragging = true);
+  sk.addEventListener('touchstart', () => seekDragging = true, { passive: true });
+  sk.addEventListener('input', () => {
+    if (videoEl && videoEl.duration) videoEl.currentTime = (sk.value / 1000) * videoEl.duration;
+  });
+  sk.addEventListener('mouseup', () => seekDragging = false);
+  sk.addEventListener('touchend', () => seekDragging = false);
+
+  document.getElementById('muteBtn').addEventListener('click', () => {
+    if (!videoEl) return;
+    videoEl.muted = !videoEl.muted;
+    document.getElementById('muteBtn').textContent = videoEl.muted ? '🔇' : '🔊';
+  });
+
+  // ── Keyboard shortcuts ──
+  document.addEventListener('keydown', e => {
+    if (e.code === 'Space') { e.preventDefault(); document.getElementById('playPauseBtn').click(); }
+    if (e.code === 'ArrowRight' && videoEl) videoEl.currentTime = Math.min(videoEl.duration, videoEl.currentTime + 5);
+    if (e.code === 'ArrowLeft' && videoEl) videoEl.currentTime = Math.max(0, videoEl.currentTime - 5);
+  });
+});
+</script>
+</body>
+</html>
